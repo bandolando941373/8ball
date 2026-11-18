@@ -841,4 +841,81 @@ class TrajectoryOverlayView(context: Context) : View(context) {
     </application>
 </manifest>`,
   },
+  {
+    id: 'github-ci',
+    filename: 'build-apk.yml',
+    path: '.github/workflows/build-apk.yml',
+    language: 'yaml',
+    description: 'GitHub Actions workflow that compiles app-debug.apk automatically (works whether files are at root or inside android-project/).',
+    code: `name: Build CueSight Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Debug APK
+        run: |
+          if [ -f "android-project/settings.gradle.kts" ]; then
+            cd android-project
+          fi
+          gradle assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CueSight-Overlay-debug-apk
+          path: '**/app-debug.apk'`,
+  },
+  {
+    id: 'buddy-ci',
+    filename: 'buddy.yml',
+    path: 'buddy.yml',
+    language: 'yaml',
+    description: 'Buddy CI/CD pipeline configuration that installs Android SDK 34 + Gradle 8.7 and outputs CueSight-Overlay.apk in the pipeline filesystem.',
+    code: `- pipeline: "Build CueSight Android APK"
+  events:
+    - type: PUSH
+      refs:
+        - "refs/heads/main"
+        - "refs/heads/master"
+  actions:
+    - action: "Build CueSight-Overlay.apk"
+      type: "BUILD"
+      docker_image_name: "library/eclipse-temurin"
+      docker_image_tag: "17-jdk"
+      shell: "BASH"
+      commands:
+        - "apt-get update -qq && apt-get install -y -qq curl unzip > /dev/null"
+        - "mkdir -p /opt/android-sdk/cmdline-tools /opt/gradle"
+        - "curl -fsSL -o /tmp/cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip && unzip -q -o /tmp/cmdline.zip -d /opt/android-sdk/cmdline-tools && mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest"
+        - "curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip && unzip -q -o /tmp/gradle.zip -d /opt/gradle"
+        - "export ANDROID_HOME=/opt/android-sdk"
+        - "export PATH=/opt/gradle/gradle-8.7/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+        - "yes | sdkmanager --licenses > /dev/null 2>&1 || true"
+        - "sdkmanager \\"platform-tools\\" \\"platforms;android-34\\" \\"build-tools;34.0.0\\" > /dev/null"
+        - "ROOT_DIR=$PWD; if [ -f android-project/settings.gradle.kts ]; then cd android-project; fi"
+        - "gradle assembleDebug --no-daemon"
+        - "cp app/build/outputs/apk/debug/app-debug.apk \\"$ROOT_DIR/CueSight-Overlay.apk\\""
+      cached_dirs:
+        - "/root/.gradle"`,
+  },
 ];
