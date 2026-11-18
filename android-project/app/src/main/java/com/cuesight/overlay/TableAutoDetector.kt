@@ -21,9 +21,11 @@ object TableAutoDetector {
     fun detectFromBitmap(frame: Bitmap): DetectedTable {
         val w = frame.width
         val h = frame.height
-        val step = max(2, min(w, h) / 180)
+        val pixels = IntArray(w * h)
+        frame.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        val feltColor = findDominantFeltColor(frame, w, h, step)
+        val step = max(2, min(w, h) / 180)
+        val feltColor = findDominantFeltColor(pixels, w, h, step)
         val fR = Color.red(feltColor)
         val fG = Color.green(feltColor)
         val fB = Color.blue(feltColor)
@@ -36,9 +38,9 @@ object TableAutoDetector {
         val maxDistSq = 48 * 48
 
         for (sy in 0 until sh) {
-            val y = sy * step
+            val yRowOffset = sy * step * w
             for (sx in 0 until sw) {
-                val pixel = frame.getPixel(sx * step, y)
+                val pixel = pixels[yRowOffset + sx * step]
                 val dr = Color.red(pixel) - fR
                 val dg = Color.green(pixel) - fG
                 val db = Color.blue(pixel) - fB
@@ -61,16 +63,15 @@ object TableAutoDetector {
         val longSide = max(width, height)
         val shortSide = max(1f, min(width, height))
         val ratio = longSide / shortSide
-        val ballRadius = (longSide / 46f).coerceIn(8f, 28f)
+        val ballRadius = (longSide / 46f).coerceIn(8f, 30f)
 
         val tableClass = when {
-            ratio > 2.15f -> "10 ft Snooker / Carom"
-            longSide / (ballRadius * 2f) >= 34f -> "9 ft Tournament Pro"
-            longSide / (ballRadius * 2f) >= 25f -> "8 ft Home Standard"
-            else -> "7 ft Bar Box"
+            ratio > 2.15f -> "10 ft Snooker"
+            longSide / (ballRadius * 2f) >= 34f -> "9 ft Pro"
+            longSide / (ballRadius * 2f) >= 25f -> "8 ft Home"
+            else -> "7 ft Bar"
         }
 
-        // Scan interior of detected felt for brightest white cluster (Cue Ball) & secondary object ball
         val inset = max(2, (ballRadius / step).toInt())
         val minSx = max(0, xMin + inset)
         val maxSx = min(sw - 1, xMax - inset)
@@ -106,15 +107,13 @@ object TableAutoDetector {
                     val cur = queue[head++]
                     val cx = cur % sw
                     val cy = cur / sw
-                    sumX += cx
-                    sumY += cy
-                    count++
+                    sumX += cx; sumY += cy; count++
                     if (cx < minBX) minBX = cx
                     if (cx > maxBX) maxBX = cx
                     if (cy < minBY) minBY = cy
                     if (cy > maxBY) maxBY = cy
 
-                    val px = frame.getPixel(cx * step, cy * step)
+                    val px = pixels[cy * step * w + cx * step]
                     lumSum += 0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)
 
                     if (cx > minSx && !feltMask[cur - 1] && !visited[cur - 1]) {
@@ -146,24 +145,22 @@ object TableAutoDetector {
         }
 
         blobs.sortByDescending { it.lum }
-        val cueBall = blobs.firstOrNull()?.let { PointF(it.x, it.y) }
-        val targetBall = blobs.getOrNull(1)?.let { PointF(it.x, it.y) }
-
         return DetectedTable(
             bounds = RectF(left, top, left + width, top + height),
             aspectRatio = ratio,
             estimatedBallRadius = ballRadius,
             estimatedTableClass = tableClass,
-            cueBall = cueBall,
-            targetBall = targetBall
+            cueBall = blobs.firstOrNull()?.let { PointF(it.x, it.y) },
+            targetBall = blobs.getOrNull(1)?.let { PointF(it.x, it.y) }
         )
     }
 
-    private fun findDominantFeltColor(bmp: Bitmap, w: Int, h: Int, step: Int): Int {
+    private fun findDominantFeltColor(pixels: IntArray, w: Int, h: Int, step: Int): Int {
         val bins = HashMap<Int, IntArray>()
         for (y in (h * 0.2).toInt() until (h * 0.8).toInt() step step) {
+            val rowOffset = y * w
             for (x in (w * 0.2).toInt() until (w * 0.8).toInt() step step) {
-                val c = bmp.getPixel(x, y)
+                val c = pixels[rowOffset + x]
                 val r = Color.red(c)
                 val g = Color.green(c)
                 val b = Color.blue(c)

@@ -9,111 +9,11 @@ export interface KotlinSourceFile {
 
 export const ANDROID_KOTLIN_FILES: KotlinSourceFile[] = [
   {
-    id: 'main-activity',
-    filename: 'MainActivity.kt',
-    path: 'android-project/app/src/main/java/com/cuesight/overlay/MainActivity.kt',
-    language: 'kotlin',
-    description: 'Requests Display Over Other Apps and MediaProjection screen capture permissions, then starts PoolOverlayService.',
-    code: `package com.cuesight.overlay
-
-import android.app.Activity
-import android.content.Intent
-import android.media.projection.MediaProjectionManager
-import android.net.Uri
-import android.os.Build
-import android.os.Bundle
-import android.provider.Settings
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var statusText: TextView
-
-    private val projectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val serviceIntent = Intent(this, PoolOverlayService::class.java).apply {
-                putExtra(PoolOverlayService.EXTRA_RESULT_CODE, result.resultCode)
-                putExtra(PoolOverlayService.EXTRA_DATA, result.data)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
-            statusText.text = "Overlay active. Open any pool app — tap Detect on the floating bar."
-        } else {
-            statusText.text = "Screen capture permission cancelled."
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 96, 48, 48)
-        }
-
-        val title = TextView(this).apply {
-            text = "CueSight Pool Overlay"
-            textSize = 24f
-        }
-
-        statusText = TextView(this).apply {
-            text = "Grant Display Over Other Apps, then start the aiming overlay."
-            textSize = 15f
-            setPadding(0, 24, 0, 36)
-        }
-
-        val btnStart = Button(this).apply {
-            text = "Start Pool Overlay"
-            setOnClickListener { startOverlayFlow() }
-        }
-
-        val btnStop = Button(this).apply {
-            text = "Stop Overlay"
-            setOnClickListener {
-                stopService(Intent(this@MainActivity, PoolOverlayService::class.java))
-                statusText.text = "Overlay stopped."
-            }
-        }
-
-        root.addView(title)
-        root.addView(statusText)
-        root.addView(btnStart)
-        root.addView(btnStop)
-        setContentView(root)
-    }
-
-    private fun startOverlayFlow() {
-        if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
-            statusText.text = "Enable 'Display over other apps', then return and tap Start Pool Overlay."
-            return
-        }
-
-        val mediaProjectionManager =
-            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-    }
-}`,
-  },
-  {
     id: 'overlay-service',
     filename: 'PoolOverlayService.kt',
     path: 'android-project/app/src/main/java/com/cuesight/overlay/PoolOverlayService.kt',
     language: 'kotlin',
-    description: 'Foreground service capturing frames via MediaProjection, auto-detecting the pool table & balls, and toggling interactive aim vs touch-passthrough.',
+    description: 'Floating overlay service with Detect, Live Auto-Track, and Lock to Shoot (FLAG_NOT_TOUCHABLE) so you can shoot on the underlying pool game while lines stay visible.',
     code: `package com.cuesight.overlay
 
 import android.app.Activity
@@ -158,11 +58,25 @@ class PoolOverlayService : Service() {
     private lateinit var fullScreenParams: WindowManager.LayoutParams
     private lateinit var controlBar: LinearLayout
     private lateinit var infoLabel: TextView
+    private lateinit var lockBtn: Button
+    private lateinit var liveBtn: Button
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var isLockedForShooting = false
+    private var isLiveTracking = false
+
+    private val liveDetectRunnable = object : Runnable {
+        override fun run() {
+            if (isLiveTracking && !isLockedForShooting) {
+                runAutoDetectFrame()
+                mainHandler.postDelayed(this, 750L)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -181,7 +95,6 @@ class PoolOverlayService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -204,6 +117,7 @@ class PoolOverlayService : Service() {
             mediaProjection = mgr.getMediaProjection(resultCode, data)
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
+                    isLiveTracking = false
                     virtualDisplay?.release()
                     imageReader?.close()
                 }
@@ -258,27 +172,57 @@ class PoolOverlayService : Service() {
                 width = detected.bounds.width(),
                 height = detected.bounds.height(),
                 ballRadius = detected.estimatedBallRadius,
+                label = detected.estimatedTableClass,
                 cue = detected.cueBall,
                 target = detected.targetBall
             )
-            infoLabel.text = "\${detected.estimatedTableClass} (\${detected.bounds.width().toInt()}×\${detected.bounds.height().toInt()})"
+            infoLabel.text = detected.estimatedTableClass
         } finally {
             image.close()
+        }
+    }
+
+    private fun toggleLockForShooting() {
+        isLockedForShooting = !isLockedForShooting
+        trajectoryView.setLockedForShooting(isLockedForShooting)
+
+        fullScreenParams.flags = if (isLockedForShooting) {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        } else {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        }
+        windowManager.updateViewLayout(trajectoryView, fullScreenParams)
+
+        if (isLockedForShooting) {
+            lockBtn.text = "LOCKED · Shoot"
+            lockBtn.setBackgroundColor(Color.parseColor("#10B981"))
+            lockBtn.setTextColor(Color.parseColor("#0B0F14"))
+        } else {
+            lockBtn.text = "Lock to Shoot"
+            lockBtn.setBackgroundColor(Color.parseColor("#38BDF8"))
+            lockBtn.setTextColor(Color.parseColor("#0B0F14"))
+            if (isLiveTracking) {
+                mainHandler.removeCallbacks(liveDetectRunnable)
+                mainHandler.post(liveDetectRunnable)
+            }
         }
     }
 
     private fun addFloatingControlBar(overlayType: Int) {
         controlBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#CC0B0F14"))
-            setPadding(16, 10, 16, 10)
+            setBackgroundColor(Color.parseColor("#DD0B0F14"))
+            setPadding(14, 10, 14, 10)
         }
 
         infoLabel = TextView(this).apply {
             text = "CueSight"
             setTextColor(Color.WHITE)
-            textSize = 12f
-            setPadding(0, 0, 12, 0)
+            textSize = 11f
+            setPadding(0, 0, 10, 0)
         }
 
         val detectBtn = Button(this).apply {
@@ -287,23 +231,25 @@ class PoolOverlayService : Service() {
             setOnClickListener { runAutoDetectFrame() }
         }
 
-        val aimToggleBtn = Button(this).apply {
-            text = "Aim: Off"
+        liveBtn = Button(this).apply {
+            text = "Live: Off"
             textSize = 11f
             setOnClickListener {
-                val enable = !trajectoryView.interactiveAimEnabled
-                trajectoryView.interactiveAimEnabled = enable
-                fullScreenParams.flags = if (enable) {
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                } else {
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                isLiveTracking = !isLiveTracking
+                text = if (isLiveTracking) "Live: On" else "Live: Off"
+                mainHandler.removeCallbacks(liveDetectRunnable)
+                if (isLiveTracking && !isLockedForShooting) {
+                    mainHandler.post(liveDetectRunnable)
                 }
-                windowManager.updateViewLayout(trajectoryView, fullScreenParams)
-                text = if (enable) "Aim: On" else "Aim: Off"
             }
+        }
+
+        lockBtn = Button(this).apply {
+            text = "Lock to Shoot"
+            textSize = 11f
+            setBackgroundColor(Color.parseColor("#38BDF8"))
+            setTextColor(Color.parseColor("#0B0F14"))
+            setOnClickListener { toggleLockForShooting() }
         }
 
         val bankBtn = Button(this).apply {
@@ -327,7 +273,8 @@ class PoolOverlayService : Service() {
 
         controlBar.addView(infoLabel)
         controlBar.addView(detectBtn)
-        controlBar.addView(aimToggleBtn)
+        controlBar.addView(liveBtn)
+        controlBar.addView(lockBtn)
         controlBar.addView(bankBtn)
         controlBar.addView(hideBtn)
 
@@ -339,24 +286,14 @@ class PoolOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 32
-            y = 90
+            x = 24
+            y = 70
         }
 
-        var startX = 0
-        var startY = 0
-        var touchX = 0f
-        var touchY = 0f
-
+        var startX = 0; var startY = 0; var touchX = 0f; var touchY = 0f
         controlBar.setOnTouchListener { _, event ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    startX = barParams.x
-                    startY = barParams.y
-                    touchX = event.rawX
-                    touchY = event.rawY
-                    true
-                }
+                MotionEvent.ACTION_DOWN -> { startX = barParams.x; startY = barParams.y; touchX = event.rawX; touchY = event.rawY; true }
                 MotionEvent.ACTION_MOVE -> {
                     barParams.x = startX + (event.rawX - touchX).toInt()
                     barParams.y = startY + (event.rawY - touchY).toInt()
@@ -372,18 +309,13 @@ class PoolOverlayService : Service() {
 
     private fun startForegroundNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "CueSight Overlay Service",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            val channel = NotificationChannel(CHANNEL_ID, "CueSight Overlay Service", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("CueSight Pool Overlay")
-            .setContentText("Aiming lines & auto-table calibration active")
+            .setContentText("Tap Lock to Shoot to pass touches through to your pool game")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .build()
 
@@ -396,9 +328,9 @@ class PoolOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        virtualDisplay?.release()
-        imageReader?.close()
-        mediaProjection?.stop()
+        isLiveTracking = false
+        mainHandler.removeCallbacks(liveDetectRunnable)
+        virtualDisplay?.release(); imageReader?.close(); mediaProjection?.stop()
         if (::trajectoryView.isInitialized) windowManager.removeView(trajectoryView)
         if (::controlBar.isInitialized) windowManager.removeView(controlBar)
     }
@@ -407,11 +339,113 @@ class PoolOverlayService : Service() {
 }`,
   },
   {
+    id: 'main-activity',
+    filename: 'MainActivity.kt',
+    path: 'android-project/app/src/main/java/com/cuesight/overlay/MainActivity.kt',
+    language: 'kotlin',
+    description: 'Requests Display Over Other Apps and MediaProjection permissions, then launches PoolOverlayService.',
+    code: `package com.cuesight.overlay
+
+import android.app.Activity
+import android.content.Intent
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var statusText: TextView
+
+    private val projectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val serviceIntent = Intent(this, PoolOverlayService::class.java).apply {
+                putExtra(PoolOverlayService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(PoolOverlayService.EXTRA_DATA, result.data)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            statusText.text =
+                "Overlay active! Open your pool app:\\n" +
+                "1. Tap Detect (or Live: On) to auto-detect table size & cue ball.\\n" +
+                "2. Drag the aim line if needed.\\n" +
+                "3. Tap Lock to Shoot so touches pass straight through to take your shot."
+        } else {
+            statusText.text = "Screen capture permission cancelled."
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 96, 48, 48)
+        }
+
+        val title = TextView(this).apply {
+            text = "CueSight Pool Overlay"
+            textSize = 24f
+        }
+
+        statusText = TextView(this).apply {
+            text = "1. Grant Display Over Other Apps & Screen Capture.\\n" +
+                   "2. Open any pool game and tap Detect on the floating bar.\\n" +
+                   "3. Tap Lock to Shoot to aim and shoot directly in your pool game while the extended lines stay overlaid."
+            textSize = 15f
+            setPadding(0, 24, 0, 36)
+        }
+
+        val btnStart = Button(this).apply {
+            text = "Start Pool Overlay"
+            setOnClickListener { startOverlayFlow() }
+        }
+
+        val btnStop = Button(this).apply {
+            text = "Stop Overlay"
+            setOnClickListener {
+                stopService(Intent(this@MainActivity, PoolOverlayService::class.java))
+                statusText.text = "Overlay stopped."
+            }
+        }
+
+        root.addView(title)
+        root.addView(statusText)
+        root.addView(btnStart)
+        root.addView(btnStop)
+        setContentView(root)
+    }
+
+    private fun startOverlayFlow() {
+        if (!Settings.canDrawOverlays(this)) {
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            startActivity(intent)
+            statusText.text = "Enable 'Display over other apps', then return and tap Start Pool Overlay."
+            return
+        }
+
+        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+    }
+}`,
+  },
+  {
     id: 'auto-detector',
     filename: 'TableAutoDetector.kt',
     path: 'android-project/app/src/main/java/com/cuesight/overlay/TableAutoDetector.kt',
     language: 'kotlin',
-    description: 'Analyzes MediaProjection Bitmaps via dominant felt clustering, projection bounds, and cue/target ball centroid detection.',
+    description: 'Fast bulk-pixel MediaProjection analyzer that computes table dimensions, size class, cue ball, and target ball in ~15ms.',
     code: `package com.cuesight.overlay
 
 import android.graphics.Bitmap
@@ -435,31 +469,26 @@ object TableAutoDetector {
     fun detectFromBitmap(frame: Bitmap): DetectedTable {
         val w = frame.width
         val h = frame.height
+        val pixels = IntArray(w * h)
+        frame.getPixels(pixels, 0, w, 0, 0, w, h)
+
         val step = max(2, min(w, h) / 180)
+        val feltColor = findDominantFeltColor(pixels, w, h, step)
+        val fR = Color.red(feltColor); val fG = Color.green(feltColor); val fB = Color.blue(feltColor)
 
-        val feltColor = findDominantFeltColor(frame, w, h, step)
-        val fR = Color.red(feltColor)
-        val fG = Color.green(feltColor)
-        val fB = Color.blue(feltColor)
-
-        val sw = w / step
-        val sh = h / step
-        val rowHits = IntArray(sh)
-        val colHits = IntArray(sw)
+        val sw = w / step; val sh = h / step
+        val rowHits = IntArray(sh); val colHits = IntArray(sw)
         val feltMask = BooleanArray(sw * sh)
         val maxDistSq = 48 * 48
 
         for (sy in 0 until sh) {
-            val y = sy * step
+            val yRowOffset = sy * step * w
             for (sx in 0 until sw) {
-                val pixel = frame.getPixel(sx * step, y)
-                val dr = Color.red(pixel) - fR
-                val dg = Color.green(pixel) - fG
-                val db = Color.blue(pixel) - fB
+                val pixel = pixels[yRowOffset + sx * step]
+                val dr = Color.red(pixel) - fR; val dg = Color.green(pixel) - fG; val db = Color.blue(pixel) - fB
                 if (dr * dr + dg * dg + db * db <= maxDistSq) {
                     feltMask[sy * sw + sx] = true
-                    rowHits[sy]++
-                    colHits[sx]++
+                    rowHits[sy]++; colHits[sx]++
                 }
             }
         }
@@ -467,31 +496,26 @@ object TableAutoDetector {
         val (yMin, yMax) = longestSpan(rowHits, (rowHits.maxOrNull() ?: 0) * 0.48f)
         val (xMin, xMax) = longestSpan(colHits, (colHits.maxOrNull() ?: 0) * 0.48f)
 
-        val left = (xMin * step).toFloat()
-        val top = (yMin * step).toFloat()
+        val left = (xMin * step).toFloat(); val top = (yMin * step).toFloat()
         val width = max(120f, ((xMax - xMin) * step).toFloat())
         val height = max(80f, ((yMax - yMin) * step).toFloat())
 
-        val longSide = max(width, height)
-        val shortSide = max(1f, min(width, height))
+        val longSide = max(width, height); val shortSide = max(1f, min(width, height))
         val ratio = longSide / shortSide
-        val ballRadius = (longSide / 46f).coerceIn(8f, 28f)
+        val ballRadius = (longSide / 46f).coerceIn(8f, 30f)
 
         val tableClass = when {
-            ratio > 2.15f -> "10 ft Snooker / Carom"
-            longSide / (ballRadius * 2f) >= 34f -> "9 ft Tournament Pro"
-            longSide / (ballRadius * 2f) >= 25f -> "8 ft Home Standard"
-            else -> "7 ft Bar Box"
+            ratio > 2.15f -> "10 ft Snooker"
+            longSide / (ballRadius * 2f) >= 34f -> "9 ft Pro"
+            longSide / (ballRadius * 2f) >= 25f -> "8 ft Home"
+            else -> "7 ft Bar"
         }
 
         val inset = max(2, (ballRadius / step).toInt())
-        val minSx = max(0, xMin + inset)
-        val maxSx = min(sw - 1, xMax - inset)
-        val minSy = max(0, yMin + inset)
-        val maxSy = min(sh - 1, yMax - inset)
+        val minSx = max(0, xMin + inset); val maxSx = min(sw - 1, xMax - inset)
+        val minSy = max(0, yMin + inset); val maxSy = min(sh - 1, yMax - inset)
 
-        val visited = BooleanArray(sw * sh)
-        val queue = IntArray(sw * sh)
+        val visited = BooleanArray(sw * sh); val queue = IntArray(sw * sh)
         val minArea = max(4, ((Math.PI * (ballRadius / step) * (ballRadius / step)) * 0.3).toInt())
         val maxArea = max(24, ((Math.PI * (ballRadius / step) * (ballRadius / step)) * 3.2).toInt())
 
@@ -503,23 +527,19 @@ object TableAutoDetector {
                 val startIdx = sy * sw + sx
                 if (feltMask[startIdx] || visited[startIdx]) continue
 
-                var head = 0
-                var tail = 0
-                queue[tail++] = startIdx
-                visited[startIdx] = true
+                var head = 0; var tail = 0
+                queue[tail++] = startIdx; visited[startIdx] = true
 
                 var sumX = 0f; var sumY = 0f; var count = 0; var lumSum = 0f
                 var minBX = sx; var maxBX = sx; var minBY = sy; var maxBY = sy
 
                 while (head < tail) {
-                    val cur = queue[head++]
-                    val cx = cur % sw
-                    val cy = cur / sw
+                    val cur = queue[head++]; val cx = cur % sw; val cy = cur / sw
                     sumX += cx; sumY += cy; count++
                     if (cx < minBX) minBX = cx; if (cx > maxBX) maxBX = cx
                     if (cy < minBY) minBY = cy; if (cy > maxBY) maxBY = cy
 
-                    val px = frame.getPixel(cx * step, cy * step)
+                    val px = pixels[cy * step * w + cx * step]
                     lumSum += 0.299f * Color.red(px) + 0.587f * Color.green(px) + 0.114f * Color.blue(px)
 
                     if (cx > minSx && !feltMask[cur - 1] && !visited[cur - 1]) { visited[cur - 1] = true; queue[tail++] = cur - 1 }
@@ -529,8 +549,7 @@ object TableAutoDetector {
                 }
 
                 if (count in minArea..maxArea) {
-                    val bw = max(1, maxBX - minBX + 1)
-                    val bh = max(1, maxBY - minBY + 1)
+                    val bw = max(1, maxBX - minBX + 1); val bh = max(1, maxBY - minBY + 1)
                     val aspect = max(bw, bh).toFloat() / min(bw, bh).toFloat()
                     if (aspect <= 1.7f) {
                         val avgLum = lumSum / count
@@ -551,11 +570,12 @@ object TableAutoDetector {
         )
     }
 
-    private fun findDominantFeltColor(bmp: Bitmap, w: Int, h: Int, step: Int): Int {
+    private fun findDominantFeltColor(pixels: IntArray, w: Int, h: Int, step: Int): Int {
         val bins = HashMap<Int, IntArray>()
         for (y in (h * 0.2).toInt() until (h * 0.8).toInt() step step) {
+            val rowOffset = y * w
             for (x in (w * 0.2).toInt() until (w * 0.8).toInt() step step) {
-                val c = bmp.getPixel(x, y)
+                val c = pixels[rowOffset + x]
                 val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c)
                 val key = ((r shr 4) shl 8) or ((g shr 4) shl 4) or (b shr 4)
                 val acc = bins.getOrPut(key) { IntArray(4) }
@@ -585,7 +605,7 @@ object TableAutoDetector {
     filename: 'TrajectoryOverlayView.kt',
     path: 'android-project/app/src/main/java/com/cuesight/overlay/TrajectoryOverlayView.kt',
     language: 'kotlin',
-    description: 'Hardware-accelerated Android Canvas view drawing extended aiming lines, ghost-ball contact, and multi-cushion rebound vectors.',
+    description: 'Draws extended aiming lines, 6 pocket alignment rings, ghost-ball contact, 90° tangent line, and multi-cushion rebounds.',
     code: `package com.cuesight.overlay
 
 import android.content.Context
@@ -597,10 +617,13 @@ import kotlin.math.*
 class TrajectoryOverlayView(context: Context) : View(context) {
 
     private var tableBounds = RectF(160f, 140f, 1120f, 620f)
+    private var tableLabel = "9 ft Pro"
     private var ballRadius = 18f
     private var maxRebounds = 3
     private var englishSpin = 0f
-    var interactiveAimEnabled = false
+
+    var isEditingOverlay = true
+        private set
 
     private var cuePos = PointF(360f, 380f)
     private var targetPos: PointF? = PointF(760f, 280f)
@@ -608,59 +631,48 @@ class TrajectoryOverlayView(context: Context) : View(context) {
     private var draggingMode = 0
 
     private val aimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#38BDF8")
-        strokeWidth = 4f
-        style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(16f, 8f), 0f)
+        color = Color.parseColor("#38BDF8"); strokeWidth = 4.5f; style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(18f, 9f), 0f)
     }
-
     private val reboundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#F59E0B")
-        strokeWidth = 3.5f
-        style = Paint.Style.STROKE
+        color = Color.parseColor("#F59E0B"); strokeWidth = 3.5f; style = Paint.Style.STROKE
     }
-
     private val objPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#10B981")
-        strokeWidth = 4f
-        style = Paint.Style.STROKE
+        color = Color.parseColor("#10B981"); strokeWidth = 4.5f; style = Paint.Style.STROKE
     }
-
+    private val tangentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#A78BFA"); strokeWidth = 2.5f; style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(8f, 6f), 0f)
+    }
     private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E2E8F0")
-        strokeWidth = 2.5f
-        style = Paint.Style.STROKE
+        color = Color.parseColor("#E2E8F0"); strokeWidth = 2.5f; style = Paint.Style.STROKE
         pathEffect = DashPathEffect(floatArrayOf(6f, 4f), 0f)
     }
-
     private val boundsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#9910B981")
-        strokeWidth = 2.5f
-        style = Paint.Style.STROKE
+        color = Color.parseColor("#8810B981"); strokeWidth = 2.5f; style = Paint.Style.STROKE
     }
-
+    private val pocketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#8834D399"); strokeWidth = 2f; style = Paint.Style.STROKE
+    }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = 26f
-        typeface = Typeface.MONOSPACE
+        color = Color.WHITE; textSize = 24f; typeface = Typeface.MONOSPACE
+    }
+    private val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#CC0B0F14"); style = Paint.Style.FILL
     }
 
-    private val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#CC0B0F14")
-        style = Paint.Style.FILL
+    fun setLockedForShooting(locked: Boolean) {
+        isEditingOverlay = !locked
+        invalidate()
     }
 
     fun updateCalibration(
-        left: Float,
-        top: Float,
-        width: Float,
-        height: Float,
-        ballRadius: Float,
-        cue: PointF?,
-        target: PointF?
+        left: Float, top: Float, width: Float, height: Float,
+        ballRadius: Float, label: String, cue: PointF?, target: PointF?
     ) {
         this.tableBounds = RectF(left, top, left + width, top + height)
         this.ballRadius = ballRadius
+        this.tableLabel = label
         if (cue != null) cuePos.set(cue.x, cue.y) else cuePos.set(left + width * 0.28f, top + height * 0.5f)
         if (target != null) {
             targetPos = PointF(target.x, target.y)
@@ -672,28 +684,26 @@ class TrajectoryOverlayView(context: Context) : View(context) {
     }
 
     fun cycleRebounds(): Int {
-        maxRebounds = (maxRebounds + 1) % 5
-        if (maxRebounds == 0) maxRebounds = 1
+        maxRebounds = (maxRebounds % 4) + 1
         invalidate()
         return maxRebounds
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!interactiveAimEnabled) return false
+        if (!isEditingOverlay) return false
         val x = event.x; val y = event.y
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 val cueDist = hypot(x - cuePos.x, y - cuePos.y)
                 val tgtDist = targetPos?.let { hypot(x - it.x, y - it.y) } ?: Float.MAX_VALUE
                 draggingMode = when {
-                    cueDist < ballRadius * 2.5f -> 1
-                    tgtDist < ballRadius * 2.5f -> 2
+                    cueDist < ballRadius * 3f -> 1
+                    tgtDist < ballRadius * 3f -> 2
                     else -> {
                         val dx = x - cuePos.x; val dy = y - cuePos.y
                         val len = hypot(dx, dy).coerceAtLeast(1e-4f)
                         aimDir.set(dx / len, dy / len)
-                        invalidate()
-                        3
+                        invalidate(); 3
                     }
                 }
                 return true
@@ -714,13 +724,9 @@ class TrajectoryOverlayView(context: Context) : View(context) {
                         aimDir.set(dx / len, dy / len)
                     }
                 }
-                invalidate()
-                return true
+                invalidate(); return true
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                draggingMode = 0
-                return true
-            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { draggingMode = 0; return true }
         }
         return false
     }
@@ -728,43 +734,52 @@ class TrajectoryOverlayView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawRect(tableBounds, boundsPaint)
+        for (p in getPocketPoints()) canvas.drawCircle(p.x, p.y, ballRadius * 1.5f, pocketPaint)
 
-        val dimText = "\${tableBounds.width().toInt()}×\${tableBounds.height().toInt()} px"
-        canvas.drawRect(tableBounds.left, max(0f, tableBounds.top - 36f), tableBounds.left + 260f, tableBounds.top, badgeBgPaint)
-        canvas.drawText(dimText, tableBounds.left + 10f, max(24f, tableBounds.top - 10f), textPaint)
+        val lockText = if (isEditingOverlay) "EDIT" else "LOCKED · SHOOT"
+        val dimText = "$tableLabel · \${tableBounds.width().toInt()}×\${tableBounds.height().toInt()} px · $lockText"
+        val tw = textPaint.measureText(dimText) + 20f
+        val labelTop = max(0f, tableBounds.top - 36f)
+        canvas.drawRect(tableBounds.left, labelTop, tableBounds.left + tw, labelTop + 32f, badgeBgPaint)
+        canvas.drawText(dimText, tableBounds.left + 10f, labelTop + 23f, textPaint)
 
-        if (interactiveAimEnabled) {
-            canvas.drawCircle(cuePos.x, cuePos.y, ballRadius + 4f, aimPaint)
-            targetPos?.let { canvas.drawCircle(it.x, it.y, ballRadius + 4f, objPaint) }
+        if (isEditingOverlay) {
+            canvas.drawCircle(cuePos.x, cuePos.y, ballRadius + 5f, aimPaint)
+            targetPos?.let { canvas.drawCircle(it.x, it.y, ballRadius + 5f, objPaint) }
         }
 
         val minX = tableBounds.left + ballRadius; val maxX = tableBounds.right - ballRadius
         val minY = tableBounds.top + ballRadius; val maxY = tableBounds.bottom - ballRadius
-
         var ox = cuePos.x; var oy = cuePos.y; var dx = aimDir.x; var dy = aimDir.y; var spin = englishSpin
 
         for (bounce in 0..maxRebounds) {
             val tx = when { dx < -1e-4f -> (minX - ox) / dx; dx > 1e-4f -> (maxX - ox) / dx; else -> Float.MAX_VALUE }
             val ty = when { dy < -1e-4f -> (minY - oy) / dy; dy > 1e-4f -> (maxY - oy) / dy; else -> Float.MAX_VALUE }
-            val hitXFirst = tx < ty
-            val wallT = min(tx, ty)
+            val hitXFirst = tx < ty; val wallT = min(tx, ty)
             if (wallT <= 0f || wallT == Float.MAX_VALUE) break
 
             val tgt = targetPos
             if (tgt != null) {
-                val ocX = tgt.x - ox; val ocY = tgt.y - oy
-                val proj = ocX * dx + ocY * dy
-                val combR = ballRadius * 2f
-                val perpSq = (ocX * ocX + ocY * ocY) - proj * proj
+                val ocX = tgt.x - ox; val ocY = tgt.y - oy; val proj = ocX * dx + ocY * dy
+                val combR = ballRadius * 2f; val perpSq = (ocX * ocX + ocY * ocY) - proj * proj
                 if (proj > 0f && perpSq < combR * combR) {
                     val tHit = proj - sqrt(combR * combR - perpSq)
                     if (tHit > 1f && tHit <= wallT) {
                         val gx = ox + dx * tHit; val gy = oy + dy * tHit
                         canvas.drawLine(ox, oy, gx, gy, if (bounce == 0) aimPaint else reboundPaint)
                         canvas.drawCircle(gx, gy, ballRadius, ghostPaint)
+
                         val odx = tgt.x - gx; val ody = tgt.y - gy
                         val olen = hypot(odx, ody).coerceAtLeast(1e-4f)
-                        traceObjectPath(canvas, tgt.x, tgt.y, odx / olen, ody / olen, minX, maxX, minY, maxY)
+                        val ndx = odx / olen; val ndy = ody / olen
+
+                        val perpAx = -ndy; val perpAy = ndx; val perpBx = ndy; val perpBy = -ndx
+                        val dotA = perpAx * dx + perpAy * dy
+                        val txDir = if (dotA >= 0f) perpAx else perpBx
+                        val tyDir = if (dotA >= 0f) perpAy else perpBy
+                        canvas.drawLine(gx, gy, gx + txDir * 140f, gy + tyDir * 140f, tangentPaint)
+
+                        traceObjectPath(canvas, tgt.x, tgt.y, ndx, ndy, minX, maxX, minY, maxY)
                         return
                     }
                 }
@@ -786,6 +801,18 @@ class TrajectoryOverlayView(context: Context) : View(context) {
         }
     }
 
+    private fun getPocketPoints(): List<PointF> {
+        val isLand = tableBounds.width() >= tableBounds.height()
+        val x0 = tableBounds.left; val y0 = tableBounds.top
+        val x1 = tableBounds.right; val y1 = tableBounds.bottom
+        val xm = (x0 + x1) * 0.5f; val ym = (y0 + y1) * 0.5f
+        return if (isLand) {
+            listOf(PointF(x0, y0), PointF(xm, y0), PointF(x1, y0), PointF(x0, y1), PointF(xm, y1), PointF(x1, y1))
+        } else {
+            listOf(PointF(x0, y0), PointF(x1, y0), PointF(x0, ym), PointF(x1, ym), PointF(x0, y1), PointF(x1, y1))
+        }
+    }
+
     private fun traceObjectPath(
         canvas: Canvas, startX: Float, startY: Float, startDx: Float, startDy: Float,
         minX: Float, maxX: Float, minY: Float, maxY: Float
@@ -794,8 +821,7 @@ class TrajectoryOverlayView(context: Context) : View(context) {
         for (b in 0..min(2, maxRebounds)) {
             val tx = when { dx < -1e-4f -> (minX - ox) / dx; dx > 1e-4f -> (maxX - ox) / dx; else -> Float.MAX_VALUE }
             val ty = when { dy < -1e-4f -> (minY - oy) / dy; dy > 1e-4f -> (maxY - oy) / dy; else -> Float.MAX_VALUE }
-            val hitXFirst = tx < ty
-            val t = min(tx, ty)
+            val hitXFirst = tx < ty; val t = min(tx, ty)
             if (t <= 0f || t == Float.MAX_VALUE) break
             val nx = ox + dx * t; val ny = oy + dy * t
             canvas.drawLine(ox, oy, nx, ny, objPaint)
@@ -807,90 +833,11 @@ class TrajectoryOverlayView(context: Context) : View(context) {
 }`,
   },
   {
-    id: 'manifest',
-    filename: 'AndroidManifest.xml',
-    path: 'android-project/app/src/main/AndroidManifest.xml',
-    language: 'xml',
-    description: 'Declares SYSTEM_ALERT_WINDOW and MediaProjection foreground service permissions.',
-    code: `<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <application
-        android:allowBackup="false"
-        android:label="@string/app_name"
-        android:theme="@style/Theme.Material3.Dark.NoActionBar">
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <service
-            android:name=".PoolOverlayService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-    </application>
-</manifest>`,
-  },
-  {
-    id: 'github-ci',
-    filename: 'build-apk.yml',
-    path: '.github/workflows/build-apk.yml',
-    language: 'yaml',
-    description: 'GitHub Actions workflow that compiles app-debug.apk automatically (works whether files are at root or inside android-project/).',
-    code: `name: Build CueSight Android APK
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
-
-      - name: Build Debug APK
-        run: |
-          if [ -f "android-project/settings.gradle.kts" ]; then
-            cd android-project
-          fi
-          gradle assembleDebug
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CueSight-Overlay-debug-apk
-          path: '**/app-debug.apk'`,
-  },
-  {
     id: 'buddy-ci',
     filename: 'buddy.yml',
     path: 'buddy.yml',
     language: 'yaml',
-    description: 'Buddy CI/CD pipeline configuration that installs Android SDK 34 + Gradle 8.7 and outputs CueSight-Overlay.apk in the pipeline filesystem.',
+    description: 'Buddy CI/CD pipeline configuration that installs Android SDK 34 + Gradle 8.7 and outputs CueSight-Overlay.apk.',
     code: `- pipeline: "Build CueSight Android APK"
   events:
     - type: PUSH

@@ -33,6 +33,7 @@ interface OverlayCanvasProps {
   shotAnalysis: ShotAnalysis;
   visualSettings: OverlayVisualSettings;
   calibrationEditMode: boolean;
+  overlayLocked: boolean;
   onChangeCueBall: (pos: Vec2) => void;
   onChangeObjectBall: (id: number, pos: Vec2) => void;
   onChangeAimDir: (dir: Vec2) => void;
@@ -60,6 +61,7 @@ export const OverlayCanvas: React.FC<OverlayCanvasProps> = ({
   shotAnalysis,
   visualSettings,
   calibrationEditMode,
+  overlayLocked,
   onChangeCueBall,
   onChangeObjectBall,
   onChangeAimDir,
@@ -279,17 +281,18 @@ export const OverlayCanvas: React.FC<OverlayCanvasProps> = ({
       ctx.setLineDash([]);
 
       // Dimension label along top edge
-      const dimLabel = `${Math.round(bounds.width)} × ${Math.round(bounds.height)} px · ${metrics.aspectRatio.toFixed(2)}:1 · ${metrics.estimatedClass}`;
+      const lockSuffix = overlayLocked ? ' · LOCKED (SHOOT)' : '';
+      const dimLabel = `${Math.round(bounds.width)} × ${Math.round(bounds.height)} px · ${metrics.aspectRatio.toFixed(2)}:1 · ${metrics.estimatedClass}${lockSuffix}`;
       ctx.font = '500 11px "JetBrains Mono", monospace';
       const textW = ctx.measureText(dimLabel).width;
       const pillX = bounds.x + 12;
       const pillY = Math.max(8, bounds.y - 24);
       ctx.fillStyle = 'rgba(11, 15, 20, 0.86)';
       ctx.fillRect(pillX - 6, pillY - 12, textW + 12, 18);
-      ctx.fillStyle = '#34D399';
+      ctx.fillStyle = overlayLocked ? '#10B981' : '#34D399';
       ctx.fillText(dimLabel, pillX, pillY + 1);
 
-      if (calibrationEditMode) {
+      if (calibrationEditMode && !overlayLocked) {
         // Draw draggable TL and BR corner calibration handles
         drawCornerHandle(ctx, bounds.x, bounds.y, 'TL');
         drawCornerHandle(ctx, bounds.x + bounds.width, bounds.y + bounds.height, 'BR');
@@ -474,6 +477,7 @@ export const OverlayCanvas: React.FC<OverlayCanvasProps> = ({
     shotAnalysis,
     visualSettings,
     calibrationEditMode,
+    overlayLocked,
     aimHandlePos.x,
     aimHandlePos.y,
   ]);
@@ -489,6 +493,7 @@ export const OverlayCanvas: React.FC<OverlayCanvasProps> = ({
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (overlayLocked) return;
     const pt = getLocalCoords(e);
     e.currentTarget.setPointerCapture(e.pointerId);
 
@@ -584,7 +589,7 @@ export const OverlayCanvas: React.FC<OverlayCanvasProps> = ({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         style={{ aspectRatio: `${stageWidth} / ${stageHeight}` }}
-        className="block w-full touch-none cursor-crosshair select-none"
+        className={`block w-full touch-none select-none ${overlayLocked ? 'cursor-default' : 'cursor-crosshair'}`}
       />
     </div>
   );

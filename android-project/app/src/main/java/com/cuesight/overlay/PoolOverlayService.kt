@@ -42,11 +42,25 @@ class PoolOverlayService : Service() {
     private lateinit var fullScreenParams: WindowManager.LayoutParams
     private lateinit var controlBar: LinearLayout
     private lateinit var infoLabel: TextView
+    private lateinit var lockBtn: Button
+    private lateinit var liveBtn: Button
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var isLockedForShooting = false
+    private var isLiveTracking = false
+
+    private val liveDetectRunnable = object : Runnable {
+        override fun run() {
+            if (isLiveTracking && !isLockedForShooting) {
+                runAutoDetectFrame()
+                mainHandler.postDelayed(this, 750L)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -60,12 +74,12 @@ class PoolOverlayService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        // Start unlocked so user can drag/aim immediately, or tap Lock to shoot through
         fullScreenParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -78,7 +92,6 @@ class PoolOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundNotification()
-
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
             ?: Activity.RESULT_CANCELED
         @Suppress("DEPRECATION")
@@ -89,6 +102,7 @@ class PoolOverlayService : Service() {
             mediaProjection = mgr.getMediaProjection(resultCode, data)
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
+                    isLiveTracking = false
                     virtualDisplay?.release()
                     imageReader?.close()
                 }
@@ -143,27 +157,58 @@ class PoolOverlayService : Service() {
                 width = detected.bounds.width(),
                 height = detected.bounds.height(),
                 ballRadius = detected.estimatedBallRadius,
+                label = detected.estimatedTableClass,
                 cue = detected.cueBall,
                 target = detected.targetBall
             )
-            infoLabel.text = "${detected.estimatedTableClass} (${detected.bounds.width().toInt()}×${detected.bounds.height().toInt()})"
+            infoLabel.text = "${detected.estimatedTableClass}"
         } finally {
             image.close()
+        }
+    }
+
+    private fun toggleLockForShooting() {
+        isLockedForShooting = !isLockedForShooting
+        trajectoryView.setLockedForShooting(isLockedForShooting)
+
+        fullScreenParams.flags = if (isLockedForShooting) {
+            // FLAG_NOT_TOUCHABLE lets all touches pass directly through to the pool game underneath!
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        } else {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        }
+        windowManager.updateViewLayout(trajectoryView, fullScreenParams)
+
+        if (isLockedForShooting) {
+            lockBtn.text = "LOCKED · Shoot"
+            lockBtn.setBackgroundColor(Color.parseColor("#10B981"))
+            lockBtn.setTextColor(Color.parseColor("#0B0F14"))
+        } else {
+            lockBtn.text = "Lock to Shoot"
+            lockBtn.setBackgroundColor(Color.parseColor("#38BDF8"))
+            lockBtn.setTextColor(Color.parseColor("#0B0F14"))
+            if (isLiveTracking) {
+                mainHandler.removeCallbacks(liveDetectRunnable)
+                mainHandler.post(liveDetectRunnable)
+            }
         }
     }
 
     private fun addFloatingControlBar(overlayType: Int) {
         controlBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#CC0B0F14"))
-            setPadding(16, 10, 16, 10)
+            setBackgroundColor(Color.parseColor("#DD0B0F14"))
+            setPadding(14, 10, 14, 10)
         }
 
         infoLabel = TextView(this).apply {
             text = "CueSight"
             setTextColor(Color.WHITE)
-            textSize = 12f
-            setPadding(0, 0, 12, 0)
+            textSize = 11f
+            setPadding(0, 0, 10, 0)
         }
 
         val detectBtn = Button(this).apply {
@@ -172,23 +217,25 @@ class PoolOverlayService : Service() {
             setOnClickListener { runAutoDetectFrame() }
         }
 
-        val aimToggleBtn = Button(this).apply {
-            text = "Aim: Off"
+        liveBtn = Button(this).apply {
+            text = "Live: Off"
             textSize = 11f
             setOnClickListener {
-                val enable = !trajectoryView.interactiveAimEnabled
-                trajectoryView.interactiveAimEnabled = enable
-                fullScreenParams.flags = if (enable) {
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                } else {
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                isLiveTracking = !isLiveTracking
+                text = if (isLiveTracking) "Live: On" else "Live: Off"
+                mainHandler.removeCallbacks(liveDetectRunnable)
+                if (isLiveTracking && !isLockedForShooting) {
+                    mainHandler.post(liveDetectRunnable)
                 }
-                windowManager.updateViewLayout(trajectoryView, fullScreenParams)
-                text = if (enable) "Aim: On" else "Aim: Off"
             }
+        }
+
+        lockBtn = Button(this).apply {
+            text = "Lock to Shoot"
+            textSize = 11f
+            setBackgroundColor(Color.parseColor("#38BDF8"))
+            setTextColor(Color.parseColor("#0B0F14"))
+            setOnClickListener { toggleLockForShooting() }
         }
 
         val bankBtn = Button(this).apply {
@@ -212,7 +259,8 @@ class PoolOverlayService : Service() {
 
         controlBar.addView(infoLabel)
         controlBar.addView(detectBtn)
-        controlBar.addView(aimToggleBtn)
+        controlBar.addView(liveBtn)
+        controlBar.addView(lockBtn)
         controlBar.addView(bankBtn)
         controlBar.addView(hideBtn)
 
@@ -224,8 +272,8 @@ class PoolOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 32
-            y = 90
+            x = 24
+            y = 70
         }
 
         var startX = 0
@@ -268,7 +316,7 @@ class PoolOverlayService : Service() {
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("CueSight Pool Overlay")
-            .setContentText("Aiming lines & auto-table calibration active")
+            .setContentText("Tap Lock to Shoot to pass touches through to your pool game")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .build()
 
@@ -281,6 +329,8 @@ class PoolOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isLiveTracking = false
+        mainHandler.removeCallbacks(liveDetectRunnable)
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()

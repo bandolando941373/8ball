@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Crosshair, ImagePlus, RotateCcw, Smartphone } from 'lucide-react';
+import { Crosshair, ImagePlus, Lock, RotateCcw, Smartphone, Unlock } from 'lucide-react';
 import {
   PoolBall,
   TableBounds,
@@ -78,6 +78,7 @@ export default function App() {
   const [english, setEnglish] = useState<number>(0);
   const [followDraw, setFollowDraw] = useState<number>(0);
   const [calibrationEditMode, setCalibrationEditMode] = useState<boolean>(false);
+  const [overlayLocked, setOverlayLocked] = useState<boolean>(false);
 
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [detectionInfo, setDetectionInfo] = useState<TableDetectionResult | null>(null);
@@ -337,10 +338,31 @@ export default function App() {
                 </div>
               )}
 
-              <div className="flex items-center gap-4 text-xs text-slate-400">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                <button
+                  type="button"
+                  onClick={() => setOverlayLocked((v) => !v)}
+                  className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    overlayLocked
+                      ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                      : 'border border-slate-700 bg-slate-800/80 text-slate-100 hover:bg-slate-700'
+                  }`}
+                >
+                  {overlayLocked ? (
+                    <>
+                      <Lock className="h-3.5 w-3.5" />
+                      LOCKED · Shoot
+                    </>
+                  ) : (
+                    <>
+                      <Unlock className="h-3.5 w-3.5 text-sky-400" />
+                      Lock to Shoot
+                    </>
+                  )}
+                </button>
                 <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                   <Crosshair className="h-3.5 w-3.5 text-sky-400" />
-                  Drag balls or tap felt to aim
+                  {overlayLocked ? 'Overlay locked against taps' : 'Drag balls or tap felt to aim'}
                 </span>
                 {activeTab === 'lab' && !screenshotUrl && (
                   <button
@@ -377,6 +399,7 @@ export default function App() {
                   shotAnalysis={shotAnalysis}
                   visualSettings={visualSettings}
                   calibrationEditMode={calibrationEditMode}
+                  overlayLocked={overlayLocked}
                   onChangeCueBall={setCueBall}
                   onChangeObjectBall={handleChangeObjectBall}
                   onChangeAimDir={setAimDir}

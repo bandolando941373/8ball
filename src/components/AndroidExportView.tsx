@@ -78,17 +78,17 @@ export const AndroidExportView: React.FC = () => {
           </p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
-          <div className="text-xs font-medium text-emerald-400">02. Touch Passthrough</div>
-          <div className="mt-1 text-sm font-semibold text-slate-100">Interactive Toggle</div>
+          <div className="text-xs font-medium text-emerald-400">02. Lock to Shoot</div>
+          <div className="mt-1 text-sm font-semibold text-slate-100">Touch Passthrough</div>
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            Toggle <span className="text-slate-200">Aim: On</span> to position trajectories, then <span className="text-slate-200">Aim: Off</span> to shoot through the overlay.
+            Tap <span className="text-slate-200">Lock to Shoot</span> so touches pass straight through to your pool game while the extended lines stay locked on screen.
           </p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
           <div className="text-xs font-medium text-amber-400">03. Auto-Calibration</div>
-          <div className="mt-1 text-sm font-semibold text-slate-100">Table &amp; Ball Lock</div>
+          <div className="mt-1 text-sm font-semibold text-slate-100">Table &amp; Cue Ball Lock</div>
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            Tap <span className="text-slate-200">Detect</span> on the floating bar to compute table size, cue ball, and target ball automatically.
+            Tap <span className="text-slate-200">Detect</span> (or <span className="text-slate-200">Live: On</span>) on the floating bar to compute table size, cue ball, and target ball automatically.
           </p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">

@@ -30,7 +30,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(serviceIntent)
             }
-            statusText.text = "Overlay active. Open any pool app — tap Auto-Detect on the floating bar."
+            statusText.text =
+                "Overlay active! Open your pool app:\n" +
+                "1. Tap Detect (or Live: On) to auto-detect table size & cue ball.\n" +
+                "2. Drag the aim line if needed.\n" +
+                "3. Tap Lock to Shoot so touches pass straight through to take your shot."
         } else {
             statusText.text = "Screen capture permission cancelled."
         }
@@ -50,7 +54,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         statusText = TextView(this).apply {
-            text = "Grant Display Over Other Apps, then start the aiming overlay."
+            text = "1. Grant Display Over Other Apps & Screen Capture.\n" +
+                   "2. Open any pool game and tap Detect on the floating bar.\n" +
+                   "3. Tap Lock to Shoot to aim and shoot directly in your pool game while the extended lines stay overlaid."
             textSize = 15f
             setPadding(0, 24, 0, 36)
         }
