@@ -24,12 +24,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.7'
+          build-root-directory: android-project
 
       - name: Build Debug APK
-        run: gradle assembleDebug
+        working-directory: android-project
+        run: ./gradlew assembleDebug
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: CueSight-Overlay-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: android-project/app/build/outputs/apk/debug/app-debug.apk
+          
