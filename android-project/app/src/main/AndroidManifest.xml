@@ -20,7 +20,7 @@
         </activity>
 
         <service
-            android:name=".PoolOverlayService"
+            android:name=".OverlayService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />

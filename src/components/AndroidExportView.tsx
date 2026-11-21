@@ -37,7 +37,7 @@ export const AndroidExportView: React.FC = () => {
             Android System Overlay Project
           </h1>
           <p className="mt-1.5 max-w-2xl text-sm text-slate-400">
-            Complete Gradle + Kotlin Android project with <code className="font-mono text-slate-200">MainActivity</code>, <code className="font-mono text-slate-200">MediaProjection</code> auto-table size detection, and <code className="font-mono text-slate-200">TYPE_APPLICATION_OVERLAY</code> aiming lines.
+            Production Gradle + Kotlin Android 10+ (API 29+) project with <code className="font-mono text-slate-200">MediaProjection</code> capture, <code className="font-mono text-slate-200">OpenCV 4.9.0</code> vision detection, and touch-passthrough <code className="font-mono text-slate-200">TYPE_APPLICATION_OVERLAY</code> reflections.
           </p>
         </div>
 
@@ -55,47 +55,47 @@ export const AndroidExportView: React.FC = () => {
       <div className="flex items-start gap-3 rounded-xl border border-slate-800 bg-[#111720] p-4 text-xs leading-relaxed text-slate-300">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
         <div>
-          <span className="font-semibold text-slate-100">How to get the installable APK on your device:</span>{' '}
-          download{' '}
+          <span className="font-semibold text-slate-100">How to compile the installable APK:</span>{' '}
+          sync this workspace directly to GitHub and trigger the included <code className="font-mono text-slate-200">buddy.yml</code> or <code className="font-mono text-slate-200">.github/workflows/build-apk.yml</code> pipeline, or download{' '}
           <a
             href="/CueSight-Android-Project.zip"
             download="CueSight-Android-Project.zip"
             className="font-medium text-sky-400 underline underline-offset-2 hover:text-sky-300"
           >
             CueSight-Android-Project.zip
-          </a>
-          , extract it, and push the <code className="font-mono text-slate-200">android-project</code> files to a GitHub repository. The included <code className="font-mono text-slate-200">.github/workflows/build-apk.yml</code> workflow compiles <code className="font-mono text-slate-200">app-debug.apk</code> in the cloud so you can download and install it directly on your Android phone (or open the project in Android Studio).
+          </a>{' '}
+          and open <code className="font-mono text-slate-200">android-project/</code> in Android Studio.
         </div>
       </div>
 
       {/* 4-Step Setup Architecture */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
-          <div className="text-xs font-medium text-sky-400">01. Runtime Permissions</div>
-          <div className="mt-1 text-sm font-semibold text-slate-100">Overlay + Screen Capture</div>
+          <div className="text-xs font-medium text-sky-400">01. Setup &amp; Sliders</div>
+          <div className="mt-1 text-sm font-semibold text-slate-100">Permissions &amp; Presets</div>
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            <code className="font-mono text-slate-300">MainActivity.kt</code> requests Display Over Other Apps and <code className="font-mono text-slate-300">MediaProjection</code>.
+            <code className="font-mono text-slate-300">MainActivity.kt</code> requests overlay &amp; <code className="font-mono text-slate-300">MediaProjection</code> access with Max Bounces (1–4), Ball Radius Offset, and Felt Color (Blue/Green/Red).
           </p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
-          <div className="text-xs font-medium text-emerald-400">02. Lock to Shoot</div>
+          <div className="text-xs font-medium text-emerald-400">02. OpenCV Vision</div>
+          <div className="mt-1 text-sm font-semibold text-slate-100">Table, Cue &amp; Aim</div>
+          <p className="mt-1 text-xs leading-relaxed text-slate-400">
+            <code className="font-mono text-slate-300">PoolVisionProcessor.kt</code> uses HSV contours, <code className="font-mono text-slate-300">HoughCircles</code>, and <code className="font-mono text-slate-300">Canny + HoughLinesP</code> at ~18 FPS.
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
+          <div className="text-xs font-medium text-amber-400">03. Lock &amp; Shoot</div>
           <div className="mt-1 text-sm font-semibold text-slate-100">Touch Passthrough</div>
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            Tap <span className="text-slate-200">Lock to Shoot</span> so touches pass straight through to your pool game while the extended lines stay locked on screen.
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
-          <div className="text-xs font-medium text-amber-400">03. Auto-Calibration</div>
-          <div className="mt-1 text-sm font-semibold text-slate-100">Table &amp; Cue Ball Lock</div>
-          <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            Tap <span className="text-slate-200">Detect</span> (or <span className="text-slate-200">Live: On</span>) on the floating bar to compute table size, cue ball, and target ball automatically.
+            <code className="font-mono text-slate-300">FLAG_NOT_TOUCHABLE</code> passes shots straight to your game while the draggable <span className="text-slate-200">LOCK / UNLOCK</span> widget freezes trajectories.
           </p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-[#111720] p-4">
           <div className="text-xs font-medium text-violet-400">04. Cloud APK Build</div>
-          <div className="mt-1 text-sm font-semibold text-slate-100">GitHub Actions Ready</div>
+          <div className="mt-1 text-sm font-semibold text-slate-100">Buddy &amp; GitHub Actions</div>
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            Included <code className="font-mono text-slate-300">build-apk.yml</code> outputs <code className="font-mono text-slate-300">app-debug.apk</code> as a downloadable artifact.
+            Preconfigured <code className="font-mono text-slate-300">buddy.yml</code> and <code className="font-mono text-slate-300">build-apk.yml</code> compile <code className="font-mono text-slate-300">app-debug.apk</code> targeting API 29–34.
           </p>
         </div>
       </div>

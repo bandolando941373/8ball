@@ -1,318 +1,225 @@
 package com.cuesight.overlay
 
 import android.content.Context
-import android.graphics.*
-import android.view.MotionEvent
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Paint
+import android.graphics.PointF
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.view.View
-import kotlin.math.*
+import kotlin.math.acos
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.sin
 
 class TrajectoryOverlayView(context: Context) : View(context) {
 
-    private var tableBounds = RectF(160f, 140f, 1120f, 620f)
-    private var tableLabel = "9 ft Pro"
-    private var ballRadius = 18f
-    private var maxRebounds = 3
-    private var englishSpin = 0f
+    private var tableBounds: RectF? = null
+    private var insetBounds: RectF? = null
+    private var cueBall: PointF? = null
+    private var ballRadiusPx: Float = 18f
+    private var launchAngleRad: Float? = null
+    private var maxBounces: Int = 3
+    private var isLocked: Boolean = false
 
-    // When true, touches are blocked from reaching the game so you can drag cue/target/aim.
-    // When false (LOCKED for shooting), touches pass straight through to the pool app underneath.
-    var isEditingOverlay = true
-        private set
-
-    private var cuePos = PointF(360f, 380f)
-    private var targetPos: PointF? = PointF(760f, 280f)
-    private var aimDir = PointF(0.95f, -0.31f)
-    private var draggingMode = 0 // 0=none, 1=cue, 2=target, 3=aim
-
-    private val aimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#38BDF8")
-        strokeWidth = 4.5f
-        style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(18f, 9f), 0f)
-    }
-
-    private val reboundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#F59E0B")
-        strokeWidth = 3.5f
-        style = Paint.Style.STROKE
-    }
-
-    private val objPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#10B981")
-        strokeWidth = 4.5f
-        style = Paint.Style.STROKE
-    }
-
-    private val tangentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#A78BFA")
-        strokeWidth = 2.5f
-        style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(8f, 6f), 0f)
-    }
-
-    private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E2E8F0")
-        strokeWidth = 2.5f
-        style = Paint.Style.STROKE
-        pathEffect = DashPathEffect(floatArrayOf(6f, 4f), 0f)
-    }
-
-    private val boundsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#8810B981")
+    private val tableOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(120, 16, 185, 129)
         strokeWidth = 2.5f
         style = Paint.Style.STROKE
     }
 
-    private val pocketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#8834D399")
+    private val cushionInsetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(150, 56, 189, 248)
         strokeWidth = 2f
         style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f)
     }
 
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+    private val cueRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#38BDF8")
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+    }
+
+    private val primaryRayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#38BDF8")
+        strokeWidth = 5f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        pathEffect = DashPathEffect(floatArrayOf(20f, 10f), 0f)
+    }
+
+    private val bankRayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#F59E0B")
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        pathEffect = DashPathEffect(floatArrayOf(14f, 8f), 0f)
+    }
+
+    private val finalRayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#10B981")
+        strokeWidth = 3.5f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f)
+    }
+
+    private val impactDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FBBF24")
+        style = Paint.Style.FILL
+    }
+
+    private val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(205, 11, 15, 20)
+        style = Paint.Style.FILL
+    }
+
+    private val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#F1F5F9")
         textSize = 24f
         typeface = Typeface.MONOSPACE
     }
 
-    private val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#CC0B0F14")
-        style = Paint.Style.FILL
+    private val bounceLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FEF08A")
+        textSize = 22f
+        typeface = Typeface.MONOSPACE
     }
 
-    fun setLockedForShooting(locked: Boolean) {
-        isEditingOverlay = !locked
+    fun setMaxBounces(bounces: Int) {
+        maxBounces = bounces.coerceIn(1, 4)
         invalidate()
     }
 
-    fun updateCalibration(
-        left: Float,
-        top: Float,
-        width: Float,
-        height: Float,
-        ballRadius: Float,
-        label: String,
-        cue: PointF?,
-        target: PointF?
-    ) {
-        this.tableBounds = RectF(left, top, left + width, top + height)
-        this.ballRadius = ballRadius
-        this.tableLabel = label
-        if (cue != null) {
-            cuePos.set(cue.x, cue.y)
-        } else {
-            cuePos.set(left + width * 0.28f, top + height * 0.5f)
-        }
-        if (target != null) {
-            targetPos = PointF(target.x, target.y)
-            val dx = target.x - cuePos.x
-            val dy = target.y - cuePos.y
-            val len = hypot(dx, dy).coerceAtLeast(1e-4f)
-            aimDir.set(dx / len, dy / len)
-        }
+    fun setLocked(locked: Boolean) {
+        isLocked = locked
         invalidate()
     }
 
-    fun cycleRebounds(): Int {
-        maxRebounds = (maxRebounds % 4) + 1
-        invalidate()
-        return maxRebounds
-    }
+    fun isOverlayLocked(): Boolean = isLocked
 
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!isEditingOverlay) return false
-        val x = event.x
-        val y = event.y
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                val cueDist = hypot(x - cuePos.x, y - cuePos.y)
-                val tgtDist = targetPos?.let { hypot(x - it.x, y - it.y) } ?: Float.MAX_VALUE
-                draggingMode = when {
-                    cueDist < ballRadius * 3f -> 1
-                    tgtDist < ballRadius * 3f -> 2
-                    else -> {
-                        val dx = x - cuePos.x
-                        val dy = y - cuePos.y
-                        val len = hypot(dx, dy).coerceAtLeast(1e-4f)
-                        aimDir.set(dx / len, dy / len)
-                        invalidate()
-                        3
-                    }
-                }
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                when (draggingMode) {
-                    1 -> cuePos.set(
-                        x.coerceIn(tableBounds.left + ballRadius, tableBounds.right - ballRadius),
-                        y.coerceIn(tableBounds.top + ballRadius, tableBounds.bottom - ballRadius)
-                    )
-                    2 -> targetPos?.set(
-                        x.coerceIn(tableBounds.left + ballRadius, tableBounds.right - ballRadius),
-                        y.coerceIn(tableBounds.top + ballRadius, tableBounds.bottom - ballRadius)
-                    )
-                    3 -> {
-                        val dx = x - cuePos.x
-                        val dy = y - cuePos.y
-                        val len = hypot(dx, dy).coerceAtLeast(1e-4f)
-                        aimDir.set(dx / len, dy / len)
-                    }
-                }
-                invalidate()
-                return true
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                draggingMode = 0
-                return true
-            }
-        }
-        return false
+    fun updateVision(result: PoolVisionProcessor.VisionResult) {
+        if (isLocked) return
+
+        tableBounds = result.tableBounds?.let { RectF(it) }
+        insetBounds = result.insetBounds?.let { RectF(it) }
+        cueBall = result.cueBall?.let { PointF(it.x, it.y) }
+        ballRadiusPx = result.ballRadiusPx
+        launchAngleRad = result.launchAngleRad
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawRect(tableBounds, boundsPaint)
 
-        // Draw 6 pocket rings for visual table alignment confirmation
-        val pockets = getPocketPoints()
-        for (p in pockets) {
-            canvas.drawCircle(p.x, p.y, ballRadius * 1.5f, pocketPaint)
+        val outer = tableBounds
+        val cushion = insetBounds
+        val cue = cueBall
+
+        if (outer != null) {
+            canvas.drawRect(outer, tableOutlinePaint)
+            drawHudBadge(canvas, outer)
         }
 
-        // Table dimension & lock status label
-        val lockText = if (isEditingOverlay) "EDIT" else "LOCKED · SHOOT"
-        val dimText = "$tableLabel · ${tableBounds.width().toInt()}×${tableBounds.height().toInt()} px · $lockText"
-        val tw = textPaint.measureText(dimText) + 20f
-        val labelTop = max(0f, tableBounds.top - 36f)
-        canvas.drawRect(tableBounds.left, labelTop, tableBounds.left + tw, labelTop + 32f, badgeBgPaint)
-        canvas.drawText(dimText, tableBounds.left + 10f, labelTop + 23f, textPaint)
-
-        // Draw Cue & Target reticles when unlocked for editing
-        if (isEditingOverlay) {
-            canvas.drawCircle(cuePos.x, cuePos.y, ballRadius + 5f, aimPaint)
-            targetPos?.let { canvas.drawCircle(it.x, it.y, ballRadius + 5f, objPaint) }
+        if (cushion != null) {
+            canvas.drawRect(cushion, cushionInsetPaint)
         }
 
-        val minX = tableBounds.left + ballRadius
-        val maxX = tableBounds.right - ballRadius
-        val minY = tableBounds.top + ballRadius
-        val maxY = tableBounds.bottom - ballRadius
+        if (cue != null) {
+            canvas.drawCircle(cue.x, cue.y, ballRadiusPx + 5f, cueRingPaint)
+        }
 
-        var ox = cuePos.x
-        var oy = cuePos.y
-        var dx = aimDir.x
-        var dy = aimDir.y
-        var spin = englishSpin
+        val angle = launchAngleRad
+        if (cushion != null && cue != null && angle != null && cushion.width() > 8f && cushion.height() > 8f) {
+            drawReflectedTrajectory(canvas, cushion, cue, angle)
+        }
+    }
 
-        for (bounce in 0..maxRebounds) {
+    private fun drawHudBadge(canvas: Canvas, outer: RectF) {
+        val stateLabel = if (isLocked) "LOCKED · READY TO SHOOT" else "LIVE TRACKING"
+        val aimLabel = if (launchAngleRad != null) "${maxBounces}x BANK" else "SEARCHING AIM"
+        val text = "$stateLabel · $aimLabel"
+
+        val padX = 14f
+        val textW = badgeTextPaint.measureText(text)
+        val badgeW = textW + padX * 2f
+        val badgeH = 38f
+        val badgeTop = (outer.top - badgeH - 6f).coerceAtLeast(8f)
+        val badgeLeft = outer.left.coerceIn(8f, (width - badgeW - 8f).coerceAtLeast(8f))
+
+        canvas.drawRoundRect(
+            badgeLeft,
+            badgeTop,
+            badgeLeft + badgeW,
+            badgeTop + badgeH,
+            8f,
+            8f,
+            badgeBgPaint
+        )
+        canvas.drawText(text, badgeLeft + padX, badgeTop + 26f, badgeTextPaint)
+    }
+
+    private fun drawReflectedTrajectory(
+        canvas: Canvas,
+        bounds: RectF,
+        start: PointF,
+        angleRad: Float
+    ) {
+        var ox = start.x.coerceIn(bounds.left + 1f, bounds.right - 1f)
+        var oy = start.y.coerceIn(bounds.top + 1f, bounds.bottom - 1f)
+        var dx = cos(angleRad.toDouble()).toFloat()
+        var dy = sin(angleRad.toDouble()).toFloat()
+
+        // Total segments = 1 initial extension + up to maxBounces reflections
+        for (segment in 0..maxBounces) {
             val tx = when {
-                dx < -1e-4f -> (minX - ox) / dx
-                dx > 1e-4f -> (maxX - ox) / dx
+                dx > 1e-4f -> (bounds.right - ox) / dx
+                dx < -1e-4f -> (bounds.left - ox) / dx
                 else -> Float.MAX_VALUE
             }
             val ty = when {
-                dy < -1e-4f -> (minY - oy) / dy
-                dy > 1e-4f -> (maxY - oy) / dy
+                dy > 1e-4f -> (bounds.bottom - oy) / dy
+                dy < -1e-4f -> (bounds.top - oy) / dy
                 else -> Float.MAX_VALUE
             }
 
-            val hitXFirst = tx < ty
-            val wallT = min(tx, ty)
-            if (wallT <= 0f || wallT == Float.MAX_VALUE) break
+            val hitVerticalWall = tx <= ty
+            val tHit = min(tx, ty)
+            if (tHit <= 0.5f || tHit == Float.MAX_VALUE) break
 
-            val tgt = targetPos
-            if (tgt != null) {
-                val ocX = tgt.x - ox
-                val ocY = tgt.y - oy
-                val proj = ocX * dx + ocY * dy
-                val combR = ballRadius * 2f
-                val perpSq = (ocX * ocX + ocY * ocY) - proj * proj
-                if (proj > 0f && perpSq < combR * combR) {
-                    val tHit = proj - sqrt(combR * combR - perpSq)
-                    if (tHit > 1f && tHit <= wallT) {
-                        val gx = ox + dx * tHit
-                        val gy = oy + dy * tHit
-                        canvas.drawLine(ox, oy, gx, gy, if (bounce == 0) aimPaint else reboundPaint)
-                        canvas.drawCircle(gx, gy, ballRadius, ghostPaint)
+            val nx = (ox + dx * tHit).coerceIn(bounds.left, bounds.right)
+            val ny = (oy + dy * tHit).coerceIn(bounds.top, bounds.bottom)
 
-                        val odx = tgt.x - gx
-                        val ody = tgt.y - gy
-                        val olen = hypot(odx, ody).coerceAtLeast(1e-4f)
-                        val ndx = odx / olen
-                        val ndy = ody / olen
-
-                        // 90-degree cue ball tangent line
-                        val perpAx = -ndy; val perpAy = ndx
-                        val perpBx = ndy; val perpBy = -ndx
-                        val dotA = perpAx * dx + perpAy * dy
-                        val txDir = if (dotA >= 0f) perpAx else perpBx
-                        val tyDir = if (dotA >= 0f) perpAy else perpBy
-                        canvas.drawLine(gx, gy, gx + txDir * 140f, gy + tyDir * 140f, tangentPaint)
-
-                        traceObjectPath(canvas, tgt.x, tgt.y, ndx, ndy, minX, maxX, minY, maxY)
-                        return
-                    }
-                }
+            val paint = when {
+                segment == 0 -> primaryRayPaint
+                segment == maxBounces -> finalRayPaint
+                else -> bankRayPaint
             }
+            canvas.drawLine(ox, oy, nx, ny, paint)
 
-            val nx = ox + dx * wallT
-            val ny = oy + dy * wallT
-            canvas.drawLine(ox, oy, nx, ny, if (bounce == 0) aimPaint else reboundPaint)
+            if (segment < maxBounces) {
+                canvas.drawCircle(nx, ny, 7f, impactDotPaint)
 
-            if (bounce == maxRebounds) break
+                // θ_i = θ_r measured from surface normal
+                val cosInc = abs(if (hitVerticalWall) dx else dy).coerceIn(0f, 1f)
+                val deg = Math.toDegrees(acos(cosInc.toDouble())).toFloat()
+                val label = String.format("B%d %.0f°", segment + 1, deg)
+                val labelX = (nx + 10f).coerceAtMost(bounds.right - 90f)
+                val labelY = (ny - 10f).coerceAtLeast(bounds.top + 24f)
+                canvas.drawText(label, labelX, labelY, bounceLabelPaint)
 
-            val cosInc = abs(if (hitXFirst) dx else dy).coerceIn(0f, 1f)
-            val angleDeg = Math.toDegrees(acos(cosInc.toDouble())).toFloat()
-            canvas.drawText(String.format("B%d %.0f°", bounce + 1, angleDeg), nx + 8f, ny - 8f, textPaint)
-
-            val rx = if (hitXFirst) -dx else dx
-            val ry = if (hitXFirst) dy else -dy
-            val spinRad = Math.toRadians((spin * 14f).toDouble()).toFloat()
-            val cosS = cos(spinRad)
-            val sinS = sin(spinRad)
-            dx = rx * cosS - ry * sinS
-            dy = rx * sinS + ry * cosS
-            spin *= 0.55f
-            ox = nx
-            oy = ny
-        }
-    }
-
-    private fun getPocketPoints(): List<PointF> {
-        val isLand = tableBounds.width() >= tableBounds.height()
-        val x0 = tableBounds.left; val y0 = tableBounds.top
-        val x1 = tableBounds.right; val y1 = tableBounds.bottom
-        val xm = (x0 + x1) * 0.5f; val ym = (y0 + y1) * 0.5f
-        return if (isLand) {
-            listOf(
-                PointF(x0, y0), PointF(xm, y0), PointF(x1, y0),
-                PointF(x0, y1), PointF(xm, y1), PointF(x1, y1)
-            )
-        } else {
-            listOf(
-                PointF(x0, y0), PointF(x1, y0),
-                PointF(x0, ym), PointF(x1, ym),
-                PointF(x0, y1), PointF(x1, y1)
-            )
-        }
-    }
-
-    private fun traceObjectPath(
-        canvas: Canvas, startX: Float, startY: Float, startDx: Float, startDy: Float,
-        minX: Float, maxX: Float, minY: Float, maxY: Float
-    ) {
-        var ox = startX; var oy = startY; var dx = startDx; var dy = startDy
-        for (b in 0..min(2, maxRebounds)) {
-            val tx = when { dx < -1e-4f -> (minX - ox) / dx; dx > 1e-4f -> (maxX - ox) / dx; else -> Float.MAX_VALUE }
-            val ty = when { dy < -1e-4f -> (minY - oy) / dy; dy > 1e-4f -> (maxY - oy) / dy; else -> Float.MAX_VALUE }
-            val hitXFirst = tx < ty
-            val t = min(tx, ty)
-            if (t <= 0f || t == Float.MAX_VALUE) break
-            val nx = ox + dx * t; val ny = oy + dy * t
-            canvas.drawLine(ox, oy, nx, ny, objPaint)
-            if (b == min(2, maxRebounds)) break
-            dx = if (hitXFirst) -dx else dx; dy = if (hitXFirst) dy else -dy
-            ox = nx; oy = ny
+                if (hitVerticalWall) {
+                    dx = -dx
+                } else {
+                    dy = -dy
+                }
+                ox = nx
+                oy = ny
+            }
         }
     }
 }
